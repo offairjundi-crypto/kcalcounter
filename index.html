@@ -4,6 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>칼로리 추적기</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#0f1419">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="칼로리 추적기">
 <style>
   :root{
     --bg:#0f1419; --card:#1a222c; --card2:#222c38; --line:#2c3846;
@@ -104,10 +112,29 @@
   .ai-note{font-size:12px; color:var(--sub); margin-top:8px;}
   .spin{display:inline-block; width:15px; height:15px; border:2px solid var(--line); border-top-color:var(--accent); border-radius:50%; animation:sp .7s linear infinite; vertical-align:-2px;}
   @keyframes sp{to{transform:rotate(360deg);}}
+  #authGate{position:fixed; inset:0; z-index:100; background:var(--bg); display:flex; align-items:center; justify-content:center; padding:20px;}
+  .auth-card{width:100%; max-width:340px; background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:24px;}
+  .auth-msg{font-size:12px; color:var(--warn); margin-top:8px; min-height:14px;}
   .foot{text-align:center; font-size:11px; color:var(--sub); margin-top:18px; line-height:1.6;}
 </style>
 </head>
 <body>
+
+<!-- 로그인 게이트 -->
+<div id="authGate">
+  <div class="auth-card">
+    <div class="logo" style="width:48px; height:48px; font-size:26px; margin:0 auto;">🥗</div>
+    <h1 style="text-align:center; margin:12px 0 4px;">칼로리 추적기</h1>
+    <div class="mut" style="text-align:center; margin:0 0 16px;">로그인하면 어느 기기에서든 내 기록이 유지됩니다.</div>
+    <label>이메일</label>
+    <input id="authEmail" type="email" autocomplete="email" placeholder="you@example.com">
+    <label style="margin-top:10px;">비밀번호</label>
+    <input id="authPw" type="password" autocomplete="current-password" placeholder="6자 이상">
+    <div id="authMsg" class="auth-msg"></div>
+    <button class="btn-accent" id="btnLogin" style="width:100%; margin-top:14px;">로그인</button>
+    <button class="btn-ghost" id="btnSignup" style="width:100%; margin-top:8px;">회원가입</button>
+  </div>
+</div>
 
 <header>
   <div class="brand">
@@ -226,17 +253,16 @@
   <div class="foods" id="foodGrid"></div>
 </section>
 
-<!-- 데이터 백업/복원 -->
+<!-- 계정 -->
 <section class="card">
   <div class="row between">
-    <h2 style="margin:0;">데이터 백업</h2>
-    <div class="row" style="gap:6px;">
-      <button class="btn-ghost" id="btnExport">내보내기</button>
-      <button class="btn-ghost" id="btnImport">가져오기</button>
+    <div>
+      <div style="font-size:12px; color:var(--sub);">로그인 계정</div>
+      <div id="acctEmail" style="font-weight:600; font-size:14px;">—</div>
     </div>
+    <button class="btn-ghost" id="btnLogout">로그아웃</button>
   </div>
-  <div class="mut">기록은 이 브라우저에만 저장됩니다. 기기나 주소(로컬↔배포)가 바뀌면 자동으로 넘어가지 않으니, 옮기기 전 '내보내기'로 백업하고 새 곳에서 '가져오기' 하세요.</div>
-  <input type="file" id="importFile" accept="application/json" class="hidden">
+  <div class="mut">내 기록은 계정에 저장되어, 어느 기기에서 로그인해도 그대로 유지됩니다.</div>
 </section>
 
 <div class="foot">
@@ -245,12 +271,19 @@
   음식 칼로리는 1인분 기준 근사치이며, 실제 양에 맞게 수정해 쓰세요.
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
+/* ---------- 계정/동기화 설정 (Supabase) ---------- */
+/* 아래 두 값을 본인 Supabase 프로젝트 값으로 교체하세요. anon 키는 공개돼도 안전합니다(RLS로 보호). */
+const SUPABASE_URL = "여기에_SUPABASE_URL_입력";      // 예: https://xxxxxxxx.supabase.co
+const SUPABASE_ANON_KEY = "여기에_ANON_KEY_입력";     // Supabase anon public key
+let sbClient = null, currentUser = null, _syncTimer = null, _applyingRemote = false;
+
 /* ---------- 데이터 저장소 ---------- */
 const KEY_PROFILE = "calTracker.profile.v1";
 const KEY_LOGS = "calTracker.logs.v1";
 const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch(e){ return d; } };
-const save = (k, v) => localStorage.setItem(k, JSON.stringify(v));
+const save = (k, v) => { localStorage.setItem(k, JSON.stringify(v)); if(!_applyingRemote) scheduleSync(); };
 
 let profile = load(KEY_PROFILE, null);
 let logs = load(KEY_LOGS, {});
@@ -602,55 +635,121 @@ async function analyzeMeal(){
 function escapeHtml(s){ return String(s).replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 function escapeAttr(s){ return escapeHtml(s); }
 
-/* ---------- 데이터 백업/복원 ---------- */
-function exportData(){
-  const keys = [KEY_PROFILE, KEY_LOGS, KEY_MYFOODS];
-  const data = {};
-  keys.forEach(k=>{ const v = localStorage.getItem(k); if(v!==null) data[k] = v; });
-  const payload = { app:"calorie-tracker", version:1, exportedAt:new Date().toISOString(), data };
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type:"application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  const d = new Date(), p = n=>String(n).padStart(2,"0");
-  a.href = url;
-  a.download = `칼로리백업_${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}.json`;
-  document.body.appendChild(a); a.click(); a.remove();
-  URL.revokeObjectURL(url);
+/* ---------- 계정/동기화 (Supabase) ---------- */
+function setAuthMsg(t, isError){
+  const el = document.getElementById("authMsg");
+  el.textContent = t || "";
+  el.style.color = isError===false ? "var(--sub)" : "var(--warn)";
 }
-function importData(file){
-  const reader = new FileReader();
-  reader.onload = ()=>{
-    let data;
-    try{
-      const parsed = JSON.parse(reader.result);
-      data = (parsed && parsed.data) ? parsed.data : parsed;
-    }catch(e){ alert("파일을 읽지 못했습니다. 올바른 백업 파일인지 확인하세요."); return; }
-    const keys = Object.keys(data || {}).filter(k=> k.indexOf("calTracker.") === 0);
-    if(keys.length === 0){ alert("복원할 데이터가 없습니다."); return; }
-    if(!confirm("현재 기록을 이 백업으로 덮어씁니다. 계속할까요?")) return;
-    keys.forEach(k=>{
-      const v = data[k];
-      localStorage.setItem(k, typeof v === "string" ? v : JSON.stringify(v));
+
+function scheduleSync(){
+  if(!currentUser) return;
+  clearTimeout(_syncTimer);
+  _syncTimer = setTimeout(syncUp, 800);
+}
+async function syncUp(){
+  if(!currentUser || !sbClient) return;
+  try{
+    await sbClient.from("user_data").upsert({
+      user_id: currentUser.id,
+      data: { profile, logs, myFoods },
+      updated_at: new Date().toISOString()
     });
-    profile = load(KEY_PROFILE, null);
-    logs = load(KEY_LOGS, {});
-    myFoods = load(KEY_MYFOODS, []);
-    render();
-    alert("복원 완료되었습니다.");
-  };
-  reader.readAsText(file);
+  }catch(e){ console.error("동기화(업로드) 실패:", e); }
 }
-document.getElementById("btnExport").onclick = exportData;
-document.getElementById("btnImport").onclick = ()=> document.getElementById("importFile").click();
-document.getElementById("importFile").onchange = (e)=>{
-  const f = e.target.files && e.target.files[0];
-  if(f) importData(f);
-  e.target.value = "";
-};
+async function syncDown(){
+  if(!currentUser || !sbClient) return;
+  try{
+    const { data, error } = await sbClient.from("user_data").select("data").eq("user_id", currentUser.id).maybeSingle();
+    if(error) throw error;
+    const blob = (data && data.data) ? data.data : null;
+    _applyingRemote = true;
+    profile = (blob && blob.profile) ? blob.profile : null;
+    logs = (blob && blob.logs) ? blob.logs : {};
+    myFoods = (blob && Array.isArray(blob.myFoods)) ? blob.myFoods : [];
+    localStorage.setItem(KEY_PROFILE, JSON.stringify(profile));
+    localStorage.setItem(KEY_LOGS, JSON.stringify(logs));
+    localStorage.setItem(KEY_MYFOODS, JSON.stringify(myFoods));
+    _applyingRemote = false;
+    activeCat = Object.keys(foodCats())[0];
+    render();
+  }catch(e){ _applyingRemote = false; console.error("동기화(다운로드) 실패:", e); }
+}
+
+async function onLogin(user){
+  if(currentUser && currentUser.id === user.id) return;
+  currentUser = user;
+  document.getElementById("acctEmail").textContent = user.email || "";
+  document.getElementById("authGate").style.display = "none";
+  await syncDown();
+  if(!profile){ document.getElementById("goalCard").classList.remove("hidden"); }
+}
+function onLogout(){
+  currentUser = null;
+  [KEY_PROFILE, KEY_LOGS, KEY_MYFOODS].forEach(k=> localStorage.removeItem(k));
+  profile = null; logs = {}; myFoods = []; activeCat = Object.keys(FOODS)[0];
+  render();
+  document.getElementById("goalCard").classList.add("hidden");
+  document.getElementById("authEmail").value = "";
+  document.getElementById("authPw").value = "";
+  document.getElementById("authGate").style.display = "flex";
+}
+
+function friendlyAuthError(err){
+  const m = (err && err.message ? err.message : "").toLowerCase();
+  if(m.includes("invalid login")) return "이메일 또는 비밀번호가 올바르지 않습니다.";
+  if(m.includes("already registered")) return "이미 가입된 이메일입니다. 로그인해 주세요.";
+  if(m.includes("password")) return "비밀번호는 6자 이상이어야 합니다.";
+  if(m.includes("email")) return "이메일 형식을 확인해 주세요.";
+  return err && err.message ? err.message : "오류가 발생했습니다.";
+}
+
+async function doLogin(){
+  const email = document.getElementById("authEmail").value.trim();
+  const pw = document.getElementById("authPw").value;
+  if(!email || !pw){ setAuthMsg("이메일과 비밀번호를 입력하세요."); return; }
+  setAuthMsg("로그인 중…", false);
+  const { error } = await sbClient.auth.signInWithPassword({ email, password: pw });
+  if(error) setAuthMsg(friendlyAuthError(error));
+  // 성공 시 onAuthStateChange → onLogin
+}
+async function doSignup(){
+  const email = document.getElementById("authEmail").value.trim();
+  const pw = document.getElementById("authPw").value;
+  if(!email || !pw){ setAuthMsg("이메일과 비밀번호를 입력하세요."); return; }
+  if(pw.length < 6){ setAuthMsg("비밀번호는 6자 이상이어야 합니다."); return; }
+  setAuthMsg("가입 중…", false);
+  const { data, error } = await sbClient.auth.signUp({ email, password: pw });
+  if(error){ setAuthMsg(friendlyAuthError(error)); return; }
+  if(data && data.session){ setAuthMsg(""); }                 // 이메일 확인 꺼져있음 → 바로 로그인
+  else { setAuthMsg("확인 메일을 보냈습니다. 메일의 링크를 누른 뒤 로그인하세요.", false); }
+}
+
+async function initAuth(){
+  if(!window.supabase || SUPABASE_URL.indexOf("여기에_") === 0){
+    setAuthMsg("서버(Supabase) 설정이 필요합니다. 관리자에게 문의하세요.");
+    document.getElementById("btnLogin").disabled = true;
+    document.getElementById("btnSignup").disabled = true;
+    return;
+  }
+  sbClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  document.getElementById("btnLogin").onclick = doLogin;
+  document.getElementById("btnSignup").onclick = doSignup;
+  document.getElementById("btnLogout").onclick = ()=> sbClient.auth.signOut();
+  document.getElementById("authPw").addEventListener("keydown", e=>{ if(e.key==="Enter") doLogin(); });
+  sbClient.auth.onAuthStateChange((event, session)=>{
+    if(session && session.user){ onLogin(session.user); }
+    else { onLogout(); }
+  });
+}
 
 /* ---------- 시작 ---------- */
-if(!profile){ document.getElementById("goalCard").classList.remove("hidden"); }
 render();
+initAuth();
+// PWA 서비스워커 등록 (https 배포 환경에서만 동작, 실패해도 앱엔 영향 없음)
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").catch(()=>{});
+}
 </script>
 </body>
 </html>
