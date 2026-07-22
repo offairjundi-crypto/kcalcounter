@@ -115,6 +115,10 @@
   #authGate{position:fixed; inset:0; z-index:100; background:var(--bg); display:flex; align-items:center; justify-content:center; padding:20px;}
   .auth-card{width:100%; max-width:340px; background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:24px;}
   .auth-msg{font-size:12px; color:var(--warn); margin-top:8px; min-height:14px;}
+  .btn-kakao{background:#FEE500; color:#191919; font-weight:700; padding:12px; border-radius:10px;}
+  .btn-google{background:#ffffff; color:#1b2530; border:1px solid #dadce0; font-weight:700; padding:12px; border-radius:10px;}
+  .auth-div{display:flex; align-items:center; gap:10px; margin:14px 0 10px; color:var(--sub); font-size:11px;}
+  .auth-div::before,.auth-div::after{content:""; flex:1; height:1px; background:var(--line);}
   .foot{text-align:center; font-size:11px; color:var(--sub); margin-top:18px; line-height:1.6;}
 </style>
 </head>
@@ -126,6 +130,9 @@
     <div class="logo" style="width:48px; height:48px; font-size:26px; margin:0 auto;">🥗</div>
     <h1 style="text-align:center; margin:12px 0 4px;">칼로리 추적기</h1>
     <div class="mut" style="text-align:center; margin:0 0 16px;">로그인하면 어느 기기에서든 내 기록이 유지됩니다.</div>
+    <button class="btn-kakao" id="btnKakao" style="width:100%;">카카오로 시작하기</button>
+    <button class="btn-google" id="btnGoogle" style="width:100%; margin-top:8px;">Google로 시작하기</button>
+    <div class="auth-div">또는 이메일로</div>
     <label>이메일</label>
     <input id="authEmail" type="email" autocomplete="email" placeholder="you@example.com">
     <label style="margin-top:10px;">비밀번호</label>
@@ -275,8 +282,8 @@
 <script>
 /* ---------- 계정/동기화 설정 (Supabase) ---------- */
 /* 아래 두 값을 본인 Supabase 프로젝트 값으로 교체하세요. anon 키는 공개돼도 안전합니다(RLS로 보호). */
-const SUPABASE_URL = "여기에_SUPABASE_URL_입력";      // 예: https://xxxxxxxx.supabase.co
-const SUPABASE_ANON_KEY = "여기에_ANON_KEY_입력";     // Supabase anon public key
+const SUPABASE_URL = "https://ikifghlnqjipzoybzkzu.supabase.co";      // 예: https://xxxxxxxx.supabase.co
+const SUPABASE_ANON_KEY = "sb_publishable_ELyZ6aHmZPlFeqUt7IIUwA_cxBXOdru";     // Supabase anon public key
 let sbClient = null, currentUser = null, _syncTimer = null, _applyingRemote = false;
 
 /* ---------- 데이터 저장소 ---------- */
@@ -725,16 +732,27 @@ async function doSignup(){
   else { setAuthMsg("확인 메일을 보냈습니다. 메일의 링크를 누른 뒤 로그인하세요.", false); }
 }
 
+async function doSocial(provider){
+  setAuthMsg(provider === "kakao" ? "카카오로 이동 중…" : "Google로 이동 중…", false);
+  const { error } = await sbClient.auth.signInWithOAuth({
+    provider,
+    options: { redirectTo: window.location.origin }
+  });
+  if(error) setAuthMsg(friendlyAuthError(error));
+  // 성공 시 해당 서비스로 이동했다가 돌아오며 onAuthStateChange → onLogin
+}
+
 async function initAuth(){
   if(!window.supabase || SUPABASE_URL.indexOf("여기에_") === 0){
     setAuthMsg("서버(Supabase) 설정이 필요합니다. 관리자에게 문의하세요.");
-    document.getElementById("btnLogin").disabled = true;
-    document.getElementById("btnSignup").disabled = true;
+    ["btnLogin","btnSignup","btnKakao","btnGoogle"].forEach(id=>{ document.getElementById(id).disabled = true; });
     return;
   }
   sbClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   document.getElementById("btnLogin").onclick = doLogin;
   document.getElementById("btnSignup").onclick = doSignup;
+  document.getElementById("btnKakao").onclick = ()=> doSocial("kakao");
+  document.getElementById("btnGoogle").onclick = ()=> doSocial("google");
   document.getElementById("btnLogout").onclick = ()=> sbClient.auth.signOut();
   document.getElementById("authPw").addEventListener("keydown", e=>{ if(e.key==="Enter") doLogin(); });
   sbClient.auth.onAuthStateChange((event, session)=>{

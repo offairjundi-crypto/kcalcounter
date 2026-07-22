@@ -112,6 +112,29 @@ Netlify는 함수 위치·형식이 달라 두 가지만 바꾸면 됩니다.
 
 > Supabase 값을 안 넣으면 로그인 화면에 "서버(Supabase) 설정이 필요합니다"가 뜨고 버튼이 비활성화됩니다.
 
+### 6) 소셜 로그인(카카오·Google) 켜기
+로그인 화면의 "카카오로 시작하기" / "Google로 시작하기" 버튼을 쓰려면 각 제공자를 Supabase에 한 번씩 연결해야 합니다. **연결 전에 버튼을 누르면 오류가 나니**, 안 쓸 제공자는 연결하거나 index.html에서 해당 버튼을 지우세요.
+
+**공통 준비**
+- Supabase → **Authentication → URL Configuration → Site URL** 에 배포 주소(`https://....vercel.app`) 입력 (로그인 후 되돌아올 주소)
+- 아래에서 쓸 **콜백 주소**: `https://<프로젝트ID>.supabase.co/auth/v1/callback`
+  (Supabase → Authentication → Providers → 각 제공자 화면에 "Callback URL"로 표시되어 있음 — 그걸 복사해 쓰면 됨)
+
+**카카오**
+1. https://developers.kakao.com → 내 애플리케이션 → **애플리케이션 추가**
+2. 앱 설정 → 플랫폼 → **Web**에 배포 주소 등록
+3. 카카오 로그인 **활성화** → **Redirect URI**에 위 콜백 주소 등록
+4. 카카오 로그인 → 보안 → **Client Secret 생성 + 활성화**
+5. 앱 키의 **REST API 키**(=Client ID)와 Client Secret을 Supabase → Authentication → Providers → **Kakao**에 입력 후 Enable
+- 이메일 동의항목은 카카오 정책상 비즈 앱 전환이 필요할 수 있습니다. 메뉴 이름이 다르면 공식 가이드 기준으로: https://supabase.com/docs/guides/auth/social-login/auth-kakao
+
+**Google**
+1. https://console.cloud.google.com → 프로젝트 생성 → APIs & Services → **OAuth consent screen** 작성 (External, 앱 이름·이메일 정도만)
+2. **Credentials → Create Credentials → OAuth client ID → Web application**
+3. **Authorized redirect URIs**에 위 콜백 주소 등록
+4. 발급된 Client ID / Client Secret을 Supabase → Authentication → Providers → **Google**에 입력 후 Enable
+- 가이드: https://supabase.com/docs/guides/auth/social-login/auth-google
+
 ---
 
 ## D. 폰에 앱처럼 설치 (PWA)
