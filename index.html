@@ -734,9 +734,12 @@ async function doSignup(){
 
 async function doSocial(provider){
   setAuthMsg(provider === "kakao" ? "카카오로 이동 중…" : "Google로 이동 중…", false);
+  const opts = { redirectTo: window.location.origin };
+  // 카카오: 앱에 설정된 동의항목(닉네임)만 요청 — 기본값(이메일 포함)을 요청하면 KOE205 발생
+  if(provider === "kakao") opts.scopes = "profile_nickname";
   const { error } = await sbClient.auth.signInWithOAuth({
     provider,
-    options: { redirectTo: window.location.origin }
+    options: opts
   });
   if(error) setAuthMsg(friendlyAuthError(error));
   // 성공 시 해당 서비스로 이동했다가 돌아오며 onAuthStateChange → onLogin
