@@ -3,7 +3,8 @@
 // - 이 함수가 서버 환경변수 GEMINI_API_KEY 로 Gemini 를 호출
 // - API 키는 절대 브라우저로 내려가지 않음 (소스/응답 어디에도 노출 안 됨)
 
-const MODEL = "gemini-3.5-flash"; // 무료 최신 Flash. 바꾸려면 이 값만 수정.
+// 기본 모델 → 서버 혼잡(503) 시 예비 모델로 자동 전환
+const MODELS = ["gemini-3.5-flash", "gemini-3.1-flash-lite"];
 
 const SCHEMA = {
   type: "OBJECT",
@@ -40,6 +41,9 @@ const SYSTEM = [
   "→ 순대는 국밥 안의 구성물이므로 국밥 칼로리에 포함시키고 별도 항목으로 만들지 않았으며, 밥은 반공기 비율로 줄였습니다.",
   "잘못된 분석(절대 금지): '순대국밥 700 + 순대 4개 200 + 공기밥 반 165' 처럼 안에 든 재료를 중복으로 더하는 것.",
   "",
+  "[사진이 있을 때]",
+  "사진 속 음식을 알아보고 위 규칙대로 구성 요소별 칼로리를 추정하세요. 사진만으로는 양과 안 보이는 재료(기름·설탕·소스)를 정확히 알기 어려우니, 흔한 1인분 기준으로 넉넉하게 잡되 note에 '사진 기준 추정이라 실제 양에 맞게 조절하세요'라고 안내하세요. 추가 설명(메모)이 함께 오면 그 정보(양·재료)를 우선 반영하세요. 음식이 아닌 사진이면 items를 비우고 note에 '음식 사진이 아닌 것 같습니다'라고 적으세요.",
+  "",
   "[출력 형식]",
   "items에는 실제 먹은 것 기준 구성 요소를 담고, 항목 이름 괄호에 포함물/양 조정 내용을 표기하세요. total은 items 합계입니다.",
   "note에는 어떤 가정으로 추정했는지 한국어 한두 문장으로 적으세요(예: '순대는 국밥에 포함해 계산했습니다'). kcal은 정수입니다."
@@ -62,29 +66,52 @@ module.exports = async (req, res) => {
   let body = req.body;
   if (typeof body === "string") { try { body = JSON.parse(body); } catch (e) { body = {}; } }
   const text = (body && body.text ? String(body.text) : "").trim();
-  if (!text) { res.status(400).json({ error: "먹은 음식을 입력해 주세요." }); return; }
+  const image = (body && body.image) ? body.image : null;   // { mimeType, data(base64) }
+  if (!text && !image) { res.status(400).json({ error: "음식 설명이나 사진을 넣어 주세요." }); return; }
   if (text.length > 500) { res.status(400).json({ error: "입력이 너무 깁니다. 짧게 적어주세요." }); return; }
+  if (image && (!image.data || typeof image.data !== "string" || image.data.length > 8000000)) {
+    res.status(400).json({ error: "사진을 처리할 수 없습니다. 다른 사진으로 시도해 주세요." }); return;
+  }
+
+  // Gemini에 보낼 parts 구성 (사진 있으면 이미지 + 안내문, 텍스트 메모도 함께)
+  const parts = [];
+  if (image) {
+    parts.push({ inline_data: { mime_type: image.mimeType || "image/jpeg", data: image.data } });
+    parts.push({ text: "이 사진 속 음식을 분석해줘." + (text ? (" 추가 설명: " + text) : "") });
+  } else {
+    parts.push({ text: "다음을 분석해줘: " + text });
+  }
 
   try {
-    const url = "https://generativelanguage.googleapis.com/v1beta/models/" +
-      MODEL + ":generateContent?key=" + encodeURIComponent(key);
-    const r = await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: SYSTEM }] },
-        contents: [{ role: "user", parts: [{ text: "다음을 분석해줘: " + text }] }],
-        generationConfig: { responseMimeType: "application/json", responseSchema: SCHEMA, temperature: 0.4 }
-      })
+    const body = JSON.stringify({
+      system_instruction: { parts: [{ text: SYSTEM }] },
+      contents: [{ role: "user", parts: parts }],
+      generationConfig: { responseMimeType: "application/json", responseSchema: SCHEMA, temperature: 0.4 }
     });
 
-    const data = await r.json().catch(() => ({}));
+    let r = null, data = null;
+    for (let i = 0; i < MODELS.length; i++) {
+      const model = MODELS[i];
+      const url = "https://generativelanguage.googleapis.com/v1beta/models/" +
+        model + ":generateContent?key=" + encodeURIComponent(key);
+      r = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: body
+      });
+      data = await r.json().catch(() => ({}));
+      if (r.ok) break;
 
-    if (!r.ok) {
       const detail = (data.error && data.error.message) ? data.error.message : ("HTTP " + r.status);
-      console.error("Gemini 오류:", r.status, detail);
+      console.error("Gemini 오류(" + model + "):", r.status, detail);
+
+      // 서버 혼잡/일시 장애면 예비 모델로 한 번 더 시도
+      if ((r.status === 503 || r.status === 500) && i < MODELS.length - 1) continue;
+
       if (r.status === 429) {
         res.status(429).json({ error: "지금 사용량이 많습니다. 잠시 후 다시 시도해 주세요." });
+      } else if (r.status === 503 || r.status === 500) {
+        res.status(503).json({ error: "AI 서버가 혼잡합니다. 잠시 후 다시 시도해 주세요." });
       } else {
         // 내부 오류 상세(키 관련 등)는 사용자에게 노출하지 않음
         res.status(502).json({ error: "분석에 실패했습니다. 잠시 후 다시 시도해 주세요." });
