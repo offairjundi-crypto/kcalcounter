@@ -3,6 +3,9 @@
 // - 이 함수가 서버 환경변수 GEMINI_API_KEY 로 Gemini 를 호출
 // - API 키는 절대 브라우저로 내려가지 않음 (소스/응답 어디에도 노출 안 됨)
 
+// 배포 확인용 버전 표식: 브라우저로 /api/analyze 를 열면 이 값이 보입니다.
+const VERSION = "v3-2026-07-24";
+
 // 기본 모델 → 서버 혼잡(503) 시 예비 모델로 자동 전환
 const MODELS = ["gemini-3.5-flash", "gemini-3.1-flash-lite"];
 
@@ -51,7 +54,7 @@ const SYSTEM = [
 
 module.exports = async (req, res) => {
   if (req.method !== "POST") {
-    res.status(405).json({ error: "POST만 허용됩니다." });
+    res.status(405).json({ error: "POST만 허용됩니다.", version: VERSION });
     return;
   }
 
@@ -83,7 +86,7 @@ module.exports = async (req, res) => {
   }
 
   try {
-    const body = JSON.stringify({
+    const reqBody = JSON.stringify({
       system_instruction: { parts: [{ text: SYSTEM }] },
       contents: [{ role: "user", parts: parts }],
       generationConfig: { responseMimeType: "application/json", responseSchema: SCHEMA, temperature: 0.4 }
@@ -97,7 +100,7 @@ module.exports = async (req, res) => {
       r = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: body
+        body: reqBody
       });
       data = await r.json().catch(() => ({}));
       if (r.ok) break;
@@ -124,8 +127,8 @@ module.exports = async (req, res) => {
       return;
     }
 
-    const parts = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
-    const txt = parts.map(function (p) { return p.text || ""; }).join("");
+    const respParts = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
+    const txt = respParts.map(function (p) { return p.text || ""; }).join("");
     let parsed;
     try { parsed = JSON.parse(txt); }
     catch (e) { res.status(502).json({ error: "응답을 해석하지 못했습니다. 다시 시도해 주세요." }); return; }
@@ -137,6 +140,9 @@ module.exports = async (req, res) => {
     });
   } catch (err) {
     console.error("프록시 예외:", err);
-    res.status(502).json({ error: "분석 서버 호출에 실패했습니다." });
+    // 진단용: 실제 오류 내용을 화면에 표시. API 키가 섞여 있으면 가림.
+    let detail = String((err && (err.name + ": " + err.message)) || err);
+    if (key) detail = detail.split(key).join("[KEY]");
+    res.status(502).json({ error: "분석 서버 호출에 실패했습니다. [" + VERSION + "] " + detail });
   }
 };
